@@ -1,0 +1,17 @@
+{
+  "usuario": {
+    "nombre": "Tu Nombre",
+    "trato": "Tu Nombre",
+    "rol": "Desarrollador / Usuario",
+    "institucion": "",
+    "plataformas_clave": []
+  },
+  "habitos_y_preferencias": {
+    "estilo_respuestas": "Conciso, resolutivo, directo y profesional",
+    "dispositivo_principal": "Teléfono móvil (Telegram) mientras la PC trabaja en segundo plano",
+    "proyectos_principales": [
+      "Mi Proyecto Principal"
+    ],
+    "notas_y_recordatorios_aprendidos": []
+  }
+}

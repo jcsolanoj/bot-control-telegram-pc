@@ -65,16 +65,100 @@ def guardar_perfil(perfil: dict):
         logger.error(f"Error guardando perfil: {e}")
 
 
+VALID_MEMORY_CATEGORIES = {
+    "identidad": "Identidad y Perfil Personal",
+    "trabajo_y_proyectos": "Trabajo, Clases y Proyectos",
+    "rutinas_y_horarios": "Rutinas y Horarios",
+    "contactos_frecuentes": "Contactos Frecuentes",
+    "preferencias_y_notas": "Preferencias y Notas Aprendidas",
+}
+
+
 def agregar_nota_perfil(nueva_nota: str) -> str:
     """Permite al agente registrar un nuevo hábito, preferencia o dato relevante del usuario."""
+    return actualizar_memoria_estructurada("preferencias_y_notas", nueva_nota)
+
+
+def actualizar_memoria_estructurada(categoria: str, dato: str) -> str:
+    """Guarda un dato personal estructurado en memoria a largo plazo."""
     perfil = cargar_perfil()
-    notas = perfil.setdefault("habitos_y_preferencias", {}).setdefault("notas_y_recordatorios_aprendidos", [])
-    limpia = nueva_nota.strip()
-    if limpia and limpia not in notas:
-        notas.append(limpia)
+    cat_key = (categoria or "preferencias_y_notas").strip().lower()
+    if cat_key not in VALID_MEMORY_CATEGORIES:
+        cat_key = "preferencias_y_notas"
+
+    limpia = (dato or "").strip()
+    if not limpia:
+        return "El dato a guardar no puede estar vacío."
+
+    if cat_key == "preferencias_y_notas":
+        lista = perfil.setdefault("habitos_y_preferencias", {}).setdefault("notas_y_recordatorios_aprendidos", [])
+    else:
+        mem_struct = perfil.setdefault("memoria_estructurada", {})
+        lista = mem_struct.setdefault(cat_key, [])
+
+    if limpia not in lista:
+        lista.append(limpia)
+        if len(lista) > 30:
+            del lista[:-30]
         guardar_perfil(perfil)
-        return f"Nota recordada y guardada en tu memoria a largo plazo: '{limpia}'"
-    return "La nota ya estaba registrada en la memoria."
+        return f"Guardado en memoria ({VALID_MEMORY_CATEGORIES[cat_key]}): '{limpia}'"
+    return f"Ese dato ya estaba en tu memoria ({VALID_MEMORY_CATEGORIES[cat_key]})."
+
+
+def olvidar_dato_memoria(texto_a_olvidar: str) -> str:
+    """Elimina cualquier nota o dato de memoria a largo plazo que coincida con el texto indicado."""
+    perfil = cargar_perfil()
+    objetivo = (texto_a_olvidar or "").strip().lower()
+    if not objetivo:
+        return "Indica qué dato deseas olvidar."
+
+    eliminados = 0
+    notas = perfil.get("habitos_y_preferencias", {}).get("notas_y_recordatorios_aprendidos", [])
+    nuevas_notas = [n for n in notas if objetivo not in n.lower()]
+    eliminados += len(notas) - len(nuevas_notas)
+    if "habitos_y_preferencias" in perfil:
+        perfil["habitos_y_preferencias"]["notas_y_recordatorios_aprendidos"] = nuevas_notas
+
+    mem_struct = perfil.get("memoria_estructurada", {})
+    for cat_key, lista in list(mem_struct.items()):
+        if isinstance(lista, list):
+            nueva_lista = [item for item in lista if objetivo not in str(item).lower()]
+            eliminados += len(lista) - len(nueva_lista)
+            mem_struct[cat_key] = nueva_lista
+
+    if eliminados > 0:
+        guardar_perfil(perfil)
+        return f"Se eliminaron {eliminados} registro(s) relacionados con '{texto_a_olvidar}' de tu memoria."
+    return f"No se encontró ningún dato en memoria que contenga '{texto_a_olvidar}'."
+
+
+def resumir_memoria_personal() -> str:
+    """Devuelve un resumen legible de todo lo que el bot sabe sobre el usuario."""
+    perfil = cargar_perfil()
+    u = perfil.get("usuario", {})
+    h = perfil.get("habitos_y_preferencias", {})
+    mem_struct = perfil.get("memoria_estructurada", {})
+
+    lines = [
+        "🧠 <b>Memoria Personal a Largo Plazo:</b>",
+        f"• <b>Nombre:</b> {u.get('nombre', 'Usuario')} ({u.get('rol', '')})",
+    ]
+    if u.get("institucion"):
+        lines.append(f"• <b>Institución:</b> {u.get('institucion')}")
+    if h.get("proyectos_principales"):
+        lines.append(f"• <b>Proyectos clave:</b> {', '.join(h['proyectos_principales'])}")
+
+    for cat_key, cat_label in VALID_MEMORY_CATEGORIES.items():
+        if cat_key == "preferencias_y_notas":
+            items = h.get("notas_y_recordatorios_aprendidos", [])
+        else:
+            items = mem_struct.get(cat_key, [])
+        if items:
+            lines.append(f"\n📌 <b>{cat_label}:</b>")
+            for item in items:
+                lines.append(f"  • {item}")
+
+    return "\n".join(lines)
 
 
 def cargar_historial(max_turnos: int = 10) -> list:
@@ -179,8 +263,18 @@ def formatear_contexto_memoria() -> str:
     notas = h.get("notas_y_recordatorios_aprendidos", [])
     if notas:
         lineas.append("- Preferencias y notas aprendidas:")
-        for n in notas[-6:]:
+        for n in notas[-8:]:
             lineas.append(f"  • {n}")
+
+    mem_struct = perfil.get("memoria_estructurada", {})
+    for cat_key, cat_label in VALID_MEMORY_CATEGORIES.items():
+        if cat_key == "preferencias_y_notas":
+            continue
+        items = mem_struct.get(cat_key, [])
+        if items:
+            lineas.append(f"- {cat_label}:")
+            for item in items[-8:]:
+                lineas.append(f"  • {item}")
 
     if actividad_ide:
         lineas.append("\nACTIVIDAD Y TRABAJO RECIENTE EN ANTIGRAVITY IDE (En tu PC):")

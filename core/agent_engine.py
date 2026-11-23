@@ -20,9 +20,13 @@ from memory_manager import (
     formatear_contexto_memoria,
     registrar_turno,
     agregar_nota_perfil,
+    actualizar_memoria_estructurada,
+    olvidar_dato_memoria,
+    resumir_memoria_personal,
     limpiar_historial_conversacion,
     obtener_actividad_reciente_antigravity
 )
+import google_workspace
 
 from google import genai
 from google.genai import types
@@ -62,13 +66,48 @@ PORTALS_MAP = {
 
 # Lista por turno para rastrear archivos adjuntos (capturas, descargas)
 CURRENT_RUN_FILES = []
+PENDING_CONFIRMATIONS = {}
+CURRENT_PENDING_CONFIRMATION = None
+
+
+def registrar_confirmacion_sensible(titulo: str, resumen: str, func, kwargs: dict) -> str:
+    """Registra una acción sensible para pedir confirmación explícita al usuario en Telegram."""
+    import uuid
+    global CURRENT_PENDING_CONFIRMATION
+    action_id = uuid.uuid4().hex[:8]
+    entry = {
+        "id": action_id,
+        "titulo": titulo,
+        "resumen": resumen,
+        "func": func,
+        "kwargs": kwargs,
+    }
+    PENDING_CONFIRMATIONS[action_id] = entry
+    CURRENT_PENDING_CONFIRMATION = entry
+    return (
+        f"[CONFIRMACION_REQUERIDA:{action_id}] Esta acción requiere tu confirmación explícita: {resumen}. "
+        f"Detente aquí y pide confirmación al usuario."
+    )
+
+
+def ejecutar_accion_confirmada(action_id: str) -> str:
+    """Ejecuta una acción sensible previamente aprobada por el usuario."""
+    entry = PENDING_CONFIRMATIONS.pop(action_id, None)
+    if not entry:
+        return "[ERROR: La confirmación expiró o ya fue procesada.]"
+    kwargs = dict(entry["kwargs"])
+    kwargs["confirmado"] = True
+    return str(entry["func"](**kwargs))
 
 
 def _is_safe_attachment_path(file_path: str) -> bool:
     """Bloquea el envío de secretos (.env, claves, sesiones) o código fuente interno del bot."""
     abs_path = os.path.abspath(file_path)
     low_name = os.path.basename(abs_path).lower()
-    blocked_names = {".env", "user_profile.json", "chat_history.json", "project_sessions.json"}
+    blocked_names = {
+        ".env", "user_profile.json", "chat_history.json", "project_sessions.json",
+        "credentials_google.json", "token_google.json",
+    }
     blocked_exts = {".p12", ".pfx", ".pem", ".key"}
     if low_name in blocked_names or low_name.startswith(".env."):
         return False
@@ -474,6 +513,30 @@ def recordar_preferencia_o_habito(detalle: str) -> str:
     return agregar_nota_perfil(detalle)
 
 
+def guardar_dato_sobre_usuario(categoria: str, dato: str) -> str:
+    """Guarda información personal estructurada sobre el usuario en su memoria a largo plazo.
+
+    Args:
+        categoria: Categoría exacta ('identidad', 'trabajo_y_proyectos', 'rutinas_y_horarios', 'contactos_frecuentes', 'preferencias_y_notas').
+        dato: Información clara y concisa a recordar permanentemente.
+    """
+    return actualizar_memoria_estructurada(categoria, dato)
+
+
+def consultar_memoria_sobre_usuario() -> str:
+    """Devuelve todo lo que el asistente recuerda a largo plazo sobre el usuario."""
+    return resumir_memoria_personal()
+
+
+def olvidar_dato_usuario(texto_a_olvidar: str) -> str:
+    """Elimina un dato específico de la memoria a largo plazo si el usuario pide olvidarlo.
+
+    Args:
+        texto_a_olvidar: Palabra clave o frase del recuerdo a eliminar.
+    """
+    return olvidar_dato_memoria(texto_a_olvidar)
+
+
 def olvidar_conversacion_reciente() -> str:
     """
     Limpia la memoria de mensajes recientes si el usuario te pide expresamente
@@ -496,8 +559,20 @@ def consultar_actividad_antigravity() -> str:
     return "\n".join(lineas)
 
 
-def apagar_pc(segundos: int = 60) -> str:
-    """Programa el apagado de la computadora en la cantidad de segundos indicada (por defecto 60 segundos)."""
+def apagar_pc(segundos: int = 60, confirmado: bool = False) -> str:
+    """Programa el apagado de la computadora en la cantidad de segundos indicada (requiere confirmación del usuario).
+
+    Args:
+        segundos: Segundos antes de apagar (por defecto 60).
+        confirmado: Debe ser False en la solicitud inicial para pedir confirmación.
+    """
+    if not confirmado:
+        return registrar_confirmacion_sensible(
+            titulo="Apagar computadora",
+            resumen=f"Apagar la computadora en {segundos} segundos.",
+            func=apagar_pc,
+            kwargs={"segundos": segundos},
+        )
     try:
         subprocess.run(["shutdown", "/s", "/t", str(segundos)], check=True, creationflags=NO_WINDOW_FLAG)
         return f"La computadora se apagará en {segundos} segundos. Si cambias de opinión, pídeme 'cancelar apagado'."
@@ -514,8 +589,20 @@ def cancelar_apagado() -> str:
         return f"No había ningún apagado pendiente o error: {e}"
 
 
-def reiniciar_pc(segundos: int = 60) -> str:
-    """Programa el reinicio de la computadora en la cantidad de segundos indicada."""
+def reiniciar_pc(segundos: int = 60, confirmado: bool = False) -> str:
+    """Programa el reinicio de la computadora en la cantidad de segundos indicada (requiere confirmación del usuario).
+
+    Args:
+        segundos: Segundos antes de reiniciar (por defecto 60).
+        confirmado: Debe ser False inicialmente para pedir confirmación.
+    """
+    if not confirmado:
+        return registrar_confirmacion_sensible(
+            titulo="Reiniciar computadora",
+            resumen=f"Reiniciar la computadora en {segundos} segundos.",
+            func=reiniciar_pc,
+            kwargs={"segundos": segundos},
+        )
     try:
         subprocess.run(["shutdown", "/r", "/t", str(segundos)], check=True, creationflags=NO_WINDOW_FLAG)
         return f"La computadora se reiniciará en {segundos} segundos."
@@ -544,16 +631,28 @@ def bloquear_pc() -> str:
         return f"Error al bloquear la pantalla: {e}"
 
 
-def cerrar_aplicaciones_abiertas(aplicacion_especifica: str = "") -> str:
+def cerrar_aplicaciones_abiertas(aplicacion_especifica: str = "", confirmado: bool = False) -> str:
     """
     Cierra de forma real y efectiva las aplicaciones y programas de usuario abiertos en Windows
     (como Google Chrome, WhatsApp, Word, Excel, PowerPoint, Acrobat, Bloc de notas, VLC, Edge, etc.).
-    Si aplicacion_especifica está vacío o es 'todas', cierra todos los programas de usuario abiertos.
-    Protege y NUNCA cierra procesos esenciales del sistema ni el asistente ni Antigravity IDE.
+    Requiere confirmación previa del usuario antes de cerrar procesos.
 
     Args:
         aplicacion_especifica: Nombre opcional de una aplicación concreta a cerrar (ej: 'chrome', 'whatsapp', 'word'). Si está vacío o es 'todas', cierra todos los programas de usuario abiertos.
+        confirmado: Debe ser False inicialmente para solicitar confirmación al usuario.
     """
+    if not confirmado:
+        objetivo_txt = (
+            f"cerrar la aplicación '{aplicacion_especifica}'"
+            if aplicacion_especifica and aplicacion_especifica.strip().lower() not in ("todas", "todos", "all", "")
+            else "cerrar TODAS las aplicaciones y ventanas abiertas en tu PC (excepto el sistema y el bot)"
+        )
+        return registrar_confirmacion_sensible(
+            titulo="Cerrar aplicaciones",
+            resumen=f"Confirmar {objetivo_txt}.",
+            func=cerrar_aplicaciones_abiertas,
+            kwargs={"aplicacion_especifica": aplicacion_especifica},
+        )
     import psutil
 
     # Protección estricta de PIDs: NUNCA auto-terminar el bot ni sus procesos hijos
@@ -830,6 +929,170 @@ def trabajar_en_proyecto_antigravity(nombre_proyecto: str, instruccion_o_tarea: 
         return f"Error trabajando en el proyecto '{nombre_proyecto}': {e}"
 
 
+def _resolve_firmar_pdf_command() -> list:
+    """Resuelve el ejecutable o módulo local de firmar-pdf si está instalado."""
+    import shutil
+    exe_in_path = shutil.which("firmar-pdf")
+    if exe_in_path:
+        return [exe_in_path]
+
+    candidates = [
+        os.path.join(os.path.dirname(sys.executable), "Scripts", "firmar-pdf.exe"),
+        os.path.join(USER_HOME, ".gemini", "antigravity", "bin", "firmar-pdf.cmd"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return [c]
+    return [sys.executable, "-m", "firma_pdf.cli"]
+
+
+def firmar_documento_pdf(
+    ruta_pdf: str,
+    pin: str,
+    texto_busqueda: str = "",
+    posicion: str = "bottom-right",
+    pagina: str = "last",
+    offset: str = "",
+    coordenadas: str = ""
+) -> str:
+    """Firma electrónicamente un documento PDF usando el motor local firmar-pdf (si está instalado) y lo adjunta a Telegram.
+
+    Args:
+        ruta_pdf: Ruta absoluta al archivo PDF a firmar.
+        pin: PIN numérico de 4 dígitos para autorizar la firma electrónica.
+        texto_busqueda: Texto opcional dentro del PDF sobre el cual estampar la firma.
+        posicion: Posición predefinida si no hay texto_busqueda ('bottom-right', 'bottom-left', 'bottom-center', 'top-right', 'top-left', 'center').
+        pagina: Página donde firmar ('last', 'first', 'all', o número de página).
+        offset: Desplazamiento fino opcional 'dx,dy'.
+        coordenadas: Coordenadas manuales opcionales 'x,y'.
+    """
+    try:
+        from pathlib import Path
+        pdf_path = Path(ruta_pdf.strip().strip('"'))
+        if not pdf_path.is_file():
+            return f"[ERROR: No se encontró el archivo PDF en '{pdf_path}']"
+        if pdf_path.suffix.lower() != ".pdf":
+            return f"[ERROR: El archivo '{pdf_path.name}' no es un PDF válido.]"
+
+        pin_clean = str(pin or "").strip()
+        if not pin_clean:
+            return "[ERROR: Se requiere el PIN de 4 dígitos para firmar electrónicamente el documento.]"
+
+        base_cmd = _resolve_firmar_pdf_command()
+        out_dir = Path(WORKSPACE_DIR) / "temp" / "signed"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = base_cmd + [
+            "-i", str(pdf_path),
+            "-o", str(out_dir),
+            "--pin", pin_clean,
+            "--page", str(pagina or "last").strip()
+        ]
+        if coordenadas and coordenadas.strip():
+            cmd.extend(["--coords", coordenadas.strip()])
+        elif texto_busqueda and texto_busqueda.strip():
+            cmd.extend(["--search-text", texto_busqueda.strip()])
+        else:
+            valid_pos = {"bottom-right", "bottom-left", "bottom-center", "top-right", "top-left", "center"}
+            pos_clean = posicion if posicion in valid_pos else "bottom-right"
+            cmd.extend(["--pos", pos_clean])
+        if offset and offset.strip():
+            cmd.extend(["--offset", offset.strip()])
+
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            creationflags=NO_WINDOW_FLAG
+        )
+        combined_output = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
+        if res.returncode != 0:
+            return f"[ERROR AL FIRMAR PDF (Código {res.returncode})]:\n{combined_output[-1500:]}"
+
+        signed_path = None
+        for line in combined_output.splitlines():
+            if "Ruta:" in line:
+                candidate = line.split("Ruta:", 1)[1].strip()
+                if os.path.exists(candidate):
+                    signed_path = candidate
+                    break
+        if not signed_path:
+            expected = out_dir / f"{pdf_path.stem}-signed.pdf"
+            if expected.is_file():
+                signed_path = str(expected)
+            else:
+                matches = sorted(out_dir.glob(f"{pdf_path.stem}*-signed*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if matches:
+                    signed_path = str(matches[0])
+
+        if not signed_path or not os.path.exists(signed_path):
+            return f"[ERROR: firmar-pdf terminó pero no se encontró el archivo -signed.pdf en {out_dir}.]"
+
+        if signed_path not in CURRENT_RUN_FILES:
+            CURRENT_RUN_FILES.append(signed_path)
+        return f"Documento firmado electrónicamente con éxito: {os.path.basename(signed_path)}\nENVIAR_ARCHIVO: {signed_path}"
+    except Exception as e:
+        return f"[ERROR ejecutando firmar-pdf: {e}]"
+
+
+def consultar_calendario_google(dias: int = 7) -> str:
+    """Consulta los próximos eventos y reuniones en Google Calendar."""
+    return google_workspace.consultar_calendario(dias=dias)
+
+
+def crear_evento_calendario_google(
+    titulo: str,
+    fecha_inicio_iso: str,
+    duracion_minutos: int = 60,
+    descripcion: str = ""
+) -> str:
+    """Crea un nuevo evento o recordatorio en Google Calendar."""
+    return google_workspace.crear_evento_calendario(
+        titulo=titulo,
+        fecha_inicio_iso=fecha_inicio_iso,
+        duracion_minutos=duracion_minutos,
+        descripcion=descripcion
+    )
+
+
+def leer_correos_gmail(limite: int = 5, solo_no_leidos: bool = True, filtro: str = "") -> str:
+    """Lee correos electrónicos recientes de Gmail."""
+    return google_workspace.leer_correos_gmail(
+        limite=limite,
+        solo_no_leidos=solo_no_leidos,
+        filtro=filtro
+    )
+
+
+def enviar_correo_gmail(
+    destinatario: str,
+    asunto: str,
+    cuerpo: str,
+    confirmado: bool = False
+) -> str:
+    """Envía un correo electrónico por Gmail (requiere confirmación explícita del usuario)."""
+    if not confirmado:
+        return registrar_confirmacion_sensible(
+            titulo="Enviar correo por Gmail",
+            resumen=f"Enviar correo a '{destinatario}' con asunto '{asunto}'.",
+            func=enviar_correo_gmail,
+            kwargs={"destinatario": destinatario, "asunto": asunto, "cuerpo": cuerpo},
+        )
+    return google_workspace.enviar_correo_gmail(
+        destinatario=destinatario,
+        asunto=asunto,
+        cuerpo=cuerpo
+    )
+
+
+def buscar_google_drive_nube(consulta: str, limite: int = 8) -> str:
+    """Busca archivos directamente en la nube de Google Drive."""
+    return google_workspace.buscar_drive_nube(consulta=consulta, limite=limite)
+
+
 # =============================================================================
 # MOTOR DEL AGENTE (Loop ReAct)
 # =============================================================================
@@ -854,9 +1117,17 @@ PAUTAS CRUCIALES DE INTERACCIÓN:
 4. CONTROL DE ENERGÍA, PANTALLA Y HARDWARE:
    - Usa `bloquear_pc`, `apagar_pc`, `reiniciar_pc`, `suspender_pc`, `capturar_pantalla_pc_fisica`, `obtener_estado_pc` y `cerrar_aplicaciones_abiertas` según corresponda.
 
-5. MEMORIA PERSISTENTE Y ESTILO:
-   - Usa la memoria a largo plazo y reciente para responder con coherencia.
+5. MEMORIA PERSISTENTE ESTRUCTURADA Y ESTILO:
+   - Si el usuario comparte datos personales, horarios, proyectos, contactos o preferencias, guárdalos automáticamente con `guardar_dato_sobre_usuario`.
+   - Si pregunta qué sabes o recuerdas de él/ella, usa `consultar_memoria_sobre_usuario`.
    - Responde de forma concisa, directa y profesional, sin encabezados `#` ni markdown roto.
+
+6. GOOGLE WORKSPACE Y FIRMA DE PDFs:
+   - Usa `consultar_calendario_google`, `crear_evento_calendario_google`, `leer_correos_gmail`, `enviar_correo_gmail` y `buscar_google_drive_nube` cuando solicite datos de Google Workspace.
+   - Si envía un PDF o pide firmar uno con su PIN, usa `firmar_documento_pdf`.
+
+7. CONFIRMACIÓN OBLIGATORIA DE ACCIONES SENSIBLES:
+   - Las herramientas `apagar_pc`, `reiniciar_pc`, `cerrar_aplicaciones_abiertas` y `enviar_correo_gmail` requieren confirmación explícita del usuario. Invócalas con `confirmado=False` y detente cuando devuelvan `[CONFIRMACION_REQUERIDA:...]`.
 
 REGLA DE ORO ANTI-ALUCINACIÓN:
 Nunca afirmes haber ejecutado una acción en la computadora o en la web si no ejecutaste exitosamente la herramienta correspondiente en este turno.
@@ -868,7 +1139,9 @@ class AgentEngine:
         self.client = genai.Client(api_key=self.api_key)
         env_model = os.getenv("GEMINI_MODEL", "").strip()
         candidates = [
+            "gemini-4-hydrogen",
             env_model,
+            "gemini-3.5-flash-lite",
             "gemini-flash-lite-latest",
             "gemini-flash-latest",
         ]
@@ -884,7 +1157,15 @@ class AgentEngine:
             abrir_en_chrome,
             buscar_archivos,
             adjuntar_archivo_a_telegram,
+            consultar_calendario_google,
+            crear_evento_calendario_google,
+            leer_correos_gmail,
+            enviar_correo_gmail,
+            buscar_google_drive_nube,
             recordar_preferencia_o_habito,
+            guardar_dato_sobre_usuario,
+            consultar_memoria_sobre_usuario,
+            olvidar_dato_usuario,
             olvidar_conversacion_reciente,
             consultar_actividad_antigravity,
             capturar_pantalla_pc_fisica,
@@ -898,6 +1179,7 @@ class AgentEngine:
             suspender_pc,
             bloquear_pc,
             cerrar_aplicaciones_abiertas,
+            firmar_documento_pdf,
             listar_proyectos_antigravity,
             trabajar_en_proyecto_antigravity,
             ejecutar_tarea_con_antigravity_cli
@@ -906,10 +1188,11 @@ class AgentEngine:
     def run_task(self, user_prompt: str) -> dict:
         """
         Ejecuta el bucle de agente autónomo con memoria persistente (corto y largo plazo)
-        y tolerancia a fallos, priorizando modelos Flash Lite.
+        y tolerancia a fallos, priorizando Gemini 4 Hydrogen.
         """
-        global CURRENT_RUN_FILES
+        global CURRENT_RUN_FILES, CURRENT_PENDING_CONFIRMATION
         CURRENT_RUN_FILES = []
+        CURRENT_PENDING_CONFIRMATION = None
         last_error = None
 
         contexto_memoria = formatear_contexto_memoria()
@@ -918,11 +1201,17 @@ class AgentEngine:
         for m in self.models_to_try:
             try:
                 logger.info(f"Procesando orden con modelo: {m}")
-                config = types.GenerateContentConfig(
-                    system_instruction=system_instruction_completa,
-                    tools=self.tools,
-                    temperature=0.2
-                )
+                config_kwargs = {
+                    "system_instruction": system_instruction_completa,
+                    "tools": self.tools,
+                    "temperature": 0.2
+                }
+                if "gemini-4-" in m.lower():
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+                elif "gemini-3.5-flash-lite" in m.lower():
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+
+                config = types.GenerateContentConfig(**config_kwargs)
                 chat = self.client.chats.create(
                     model=m,
                     config=config
@@ -960,7 +1249,8 @@ class AgentEngine:
                     "success": True,
                     "text": cleaned_reply,
                     "files": files_to_send,
-                    "model_used": m
+                    "model_used": m,
+                    "pending_confirmation": CURRENT_PENDING_CONFIRMATION,
                 }
             except Exception as e:
                 last_error = e
@@ -976,10 +1266,10 @@ class AgentEngine:
             "files": []
         }
 
-    def process_voice_and_run(self, audio_bytes: bytes, mime_type: str = "audio/ogg") -> dict:
-        """Transcribe la nota de voz usando modelos -latest (priorizando Lite) y ejecuta el bucle de agente."""
+    def process_voice_and_run(self, audio_bytes: bytes, mime_type: str = "audio/ogg", extra_context: str = "") -> dict:
+        """Transcribe la nota de voz usando modelos Flash Lite y ejecuta el bucle de agente."""
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
-        voice_models = self.models_to_try
+        voice_models = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"] + self.models_to_try
         transcription = None
         last_err = None
 
@@ -1016,6 +1306,7 @@ class AgentEngine:
                 "files": []
             }
 
-        result = self.run_task(transcription)
+        prompt_to_run = f"{extra_context}\n\nInstrucción del usuario: {transcription}" if extra_context else transcription
+        result = self.run_task(prompt_to_run)
         result["transcription"] = transcription
         return result

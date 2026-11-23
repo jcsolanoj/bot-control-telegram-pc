@@ -1,31 +1,71 @@
-# Python
+# Entorno y Secretos (CRÍTICO: NUNCA SUBIR CREDENCIALES)
+.env
+*.env
+core/.env
+*.env.*
+!.env.example
+!core/.env.example
+credentials_google.json
+token_google.json
+core/credentials_google.json
+core/token_google.json
+
+# Sesiones persistentes y perfiles de usuario
+storage_session_*.json
+chat_history.json
+user_profile.json
+project_sessions.json
+
+# Archivos de Registro y Logs
+*.log
+bot.log
+crash.log
+run_output.log
+bot_stdout.log
+bot_stderr.log
+
+# Archivos temporales y capturas de pantalla
+temp/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+!docs/images/*.png
+
+# Caché de Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.egg-info/
-.pytest_cache/
-.venv/
+*.so
+.Python
+env/
 venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Secrets, sessions & runtime data (CRITICAL)
-.env
-core/.env
-*.env.*
-core/user_profile.json
-core/chat_history.json
-core/project_sessions.json
-core/storage_session_*.json
-core/temp/
-core/descargas/
-core/*.log
-core/*.png
-*.p12
-*.pfx
-*.pem
-*.key
+# Navegadores y Playwright
+.playwright/
 
-# IDE & OS
-.vscode/
-.idea/
-.DS_Store
+# Sistema Operativo y Editores
 Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -45,7 +45,7 @@ echo Guardando credenciales en core\.env ...
     echo TELEGRAM_ALLOWED_USER_ID=%USER_ID%
     echo.
     echo GEMINI_API_KEY=%GEMINI_KEY%
-    echo GEMINI_MODEL=gemini-3.1-flash-lite
+    echo GEMINI_MODEL=gemini-4-hydrogen
     echo.
     echo # Credenciales Institucionales / Portales (Opcional)
     echo INSTITUTIONAL_USER=

@@ -27,6 +27,7 @@ from memory_manager import (
     obtener_actividad_reciente_antigravity
 )
 import google_workspace
+import usage_tracker
 
 from google import genai
 from google.genai import types
@@ -1093,6 +1094,11 @@ def buscar_google_drive_nube(consulta: str, limite: int = 8) -> str:
     return google_workspace.buscar_drive_nube(consulta=consulta, limite=limite)
 
 
+def consultar_consumo_api() -> str:
+    """Consulta el consumo de tokens y costo estimado de la API de Gemini (hoy, última consulta y total)."""
+    return usage_tracker.obtener_resumen_consumo()
+
+
 # =============================================================================
 # MOTOR DEL AGENTE (Loop ReAct)
 # =============================================================================
@@ -1162,6 +1168,7 @@ class AgentEngine:
             leer_correos_gmail,
             enviar_correo_gmail,
             buscar_google_drive_nube,
+            consultar_consumo_api,
             recordar_preferencia_o_habito,
             guardar_dato_sobre_usuario,
             consultar_memoria_sobre_usuario,
@@ -1217,6 +1224,10 @@ class AgentEngine:
                     config=config
                 )
                 response = chat.send_message(user_prompt)
+                try:
+                    usage_tracker.registrar_consumo(m, getattr(response, "usage_metadata", None))
+                except Exception:
+                    pass
                 final_text = response.text or ""
                 
                 # Detectar archivos marcados para enviar
@@ -1280,6 +1291,10 @@ class AgentEngine:
                     contents=[audio_part, "Por favor transcribe exactamente lo que dice este audio en español. Solo devuelve la transcripción."]
                 )
                 if trans_res and trans_res.text:
+                    try:
+                        usage_tracker.registrar_consumo(vm, getattr(trans_res, "usage_metadata", None))
+                    except Exception:
+                        pass
                     transcription = trans_res.text.strip()
                     break
                 elif trans_res and getattr(trans_res, "candidates", None):

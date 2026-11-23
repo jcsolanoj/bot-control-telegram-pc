@@ -15,6 +15,7 @@ storage_session_*.json
 chat_history.json
 user_profile.json
 project_sessions.json
+usage_stats.json
 
 # Archivos de Registro y Logs
 *.log

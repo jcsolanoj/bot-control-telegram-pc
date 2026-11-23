@@ -63,6 +63,7 @@ from telegram.ext import (
 from agent_engine import AgentEngine, firmar_documento_pdf, ejecutar_accion_confirmada, PENDING_CONFIRMATIONS
 from agent_executor import cancel_running_tasks
 from memory_manager import resumir_memoria_personal
+from usage_tracker import obtener_resumen_consumo
 from telegram_formatter import clean_markdown_for_telegram, split_long_message, strip_all_markdown
 
 # Configurar logs tanto en consola (si existe) como en archivo persistente
@@ -314,6 +315,14 @@ async def memoria_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(user.id):
         return
     await update.message.reply_text(resumir_memoria_personal(), parse_mode=ParseMode.HTML)
+
+
+async def costo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /costo o /consumo para consultar los tokens usados y el costo estimado."""
+    user = update.effective_user
+    if not is_authorized(user.id):
+        return
+    await update.message.reply_text(obtener_resumen_consumo(), parse_mode=ParseMode.HTML)
 
 
 async def send_confirmation_prompt(update: Update, user_id: int, pending_conf: dict):
@@ -677,6 +686,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("memoria", memoria_command))
+    app.add_handler(CommandHandler("costo", costo_command))
+    app.add_handler(CommandHandler("consumo", costo_command))
     app.add_handler(CommandHandler("proyecto", proyecto_command))
     app.add_handler(CommandHandler("proyectos", proyecto_command))
     app.add_handler(CommandHandler("cancelar", cancel_command))

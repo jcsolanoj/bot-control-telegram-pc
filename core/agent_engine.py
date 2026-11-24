@@ -28,6 +28,7 @@ from memory_manager import (
 )
 import google_workspace
 import usage_tracker
+import gemini_cli_tools
 
 from google import genai
 from google.genai import types
@@ -1099,6 +1100,44 @@ def consultar_consumo_api() -> str:
     return usage_tracker.obtener_resumen_consumo()
 
 
+def responder_con_audio(texto_a_hablar: str, voz: str = "Kore", estilo: str = "") -> str:
+    """Convierte texto a voz hablada (TTS) y lo adjunta como nota de voz/audio en Telegram."""
+    global CURRENT_RUN_FILES
+    audio_path, status_msg = gemini_cli_tools.generar_audio_tts(
+        texto=texto_a_hablar, voz=voz, estilo=estilo, idioma="es-419"
+    )
+    if not audio_path:
+        return status_msg
+    if audio_path not in CURRENT_RUN_FILES:
+        CURRENT_RUN_FILES.append(audio_path)
+    return f"Audio generado y adjuntado para Telegram.\nENVIAR_ARCHIVO: {audio_path}"
+
+
+def transcribir_archivo_multimedia(ruta_archivo: str, formato: str = "md", incluir_hablantes: bool = True) -> str:
+    """Transcribe un archivo de audio o video a texto, Markdown o subtítulos SRT."""
+    global CURRENT_RUN_FILES
+    out_path, preview_or_err = gemini_cli_tools.transcribir_archivo_multimedia(
+        ruta_archivo=ruta_archivo, formato=formato, incluir_hablantes=incluir_hablantes
+    )
+    if not out_path:
+        return preview_or_err
+    if out_path not in CURRENT_RUN_FILES:
+        CURRENT_RUN_FILES.append(out_path)
+    return f"Transcripción completada: {os.path.basename(out_path)}\nENVIAR_ARCHIVO: {out_path}\n\nVista previa:\n{preview_or_err}"
+
+
+def investigacion_profunda(tema: str) -> str:
+    """Ejecuta una investigación profunda (Deep Research) con fuentes primarias y devuelve el informe en Markdown."""
+    global CURRENT_RUN_FILES
+    md_path, report_or_err = gemini_cli_tools.ejecutar_investigacion_profunda(tema=tema)
+    if not md_path:
+        return report_or_err
+    if md_path not in CURRENT_RUN_FILES:
+        CURRENT_RUN_FILES.append(md_path)
+    resumen = report_or_err[:2500] + ("\n\n... [Informe completo adjunto en el archivo .md]" if len(report_or_err) > 2500 else "")
+    return f"Investigación profunda completada.\nENVIAR_ARCHIVO: {md_path}\n\n{resumen}"
+
+
 # =============================================================================
 # MOTOR DEL AGENTE (Loop ReAct)
 # =============================================================================
@@ -1169,6 +1208,9 @@ class AgentEngine:
             enviar_correo_gmail,
             buscar_google_drive_nube,
             consultar_consumo_api,
+            responder_con_audio,
+            transcribir_archivo_multimedia,
+            investigacion_profunda,
             recordar_preferencia_o_habito,
             guardar_dato_sobre_usuario,
             consultar_memoria_sobre_usuario,

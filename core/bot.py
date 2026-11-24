@@ -278,7 +278,10 @@ async def send_attached_files(update: Update, files_to_send: list):
     for file_path in files_to_send:
         if os.path.exists(file_path):
             file_name = os.path.basename(file_path)
-            is_image = file_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            low_path = file_path.lower()
+            is_image = low_path.endswith((".png", ".jpg", ".jpeg", ".webp"))
+            is_voice_ogg = low_path.endswith(".ogg")
+            is_audio = low_path.endswith((".wav", ".mp3", ".m4a"))
             size_mb = os.path.getsize(file_path) / (1024 * 1024)
             try:
                 if is_image and size_mb < 10:
@@ -291,6 +294,23 @@ async def send_attached_files(update: Update, files_to_send: list):
                             photo=photo_doc,
                             caption=f"📷 <code>{file_name}</code>",
                             parse_mode=ParseMode.HTML
+                        )
+                elif is_voice_ogg and size_mb < 45:
+                    try:
+                        await update.message.reply_chat_action(ChatAction.RECORD_VOICE)
+                    except Exception:
+                        pass
+                    with open(file_path, "rb") as voice_doc:
+                        await update.message.reply_voice(voice=voice_doc)
+                elif is_audio and size_mb < 45:
+                    try:
+                        await update.message.reply_chat_action(ChatAction.UPLOAD_VOICE)
+                    except Exception:
+                        pass
+                    with open(file_path, "rb") as audio_doc:
+                        await update.message.reply_audio(
+                            audio=audio_doc,
+                            title=file_name,
                         )
                 else:
                     try:

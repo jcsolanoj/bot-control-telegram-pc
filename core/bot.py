@@ -1,4 +1,4 @@
-"""
+﻿"""
 Bot de Telegram conectado al Agente General Autónomo (Antigravity Core).
 Permite delegar tareas reales en la computadora desde Telegram:
 - Manipulación, edición y envío de documentos (Google Drive, OneDrive, etc.)
@@ -24,6 +24,8 @@ import re
 import asyncio
 import datetime
 import ctypes
+import secrets
+import random
 
 # Asegurar soporte de caracteres y streams válidos en pythonw / sin consola
 try:
@@ -103,6 +105,8 @@ CURRENT_RUNNING_TASK = None
 PENDING_PDFS = {}
 # Rastreo de confirmaciones de acciones sensibles pendientes por usuario {user_id: action_id}
 PENDING_USER_CONFIRM = {}
+# Sesiones de teclado numérico seguro (enmascarado) para PIN de firma PDF {session_id: dict}
+PENDING_PIN_SESSIONS = {}
 
 
 def is_authorized(user_id: int) -> bool:
@@ -135,17 +139,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_msg = (
         "👋 <b>¡Hola! Tu Agente Autónomo Antigravity está listo.</b>\n\n"
-        "Opero con <b>Gemini 4 Hydrogen</b>, herramientas locales y Antigravity CLI en tu computadora:\n\n"
+        "Ahora opero con la potencia de <b>Antigravity CLI</b> y Google AI Pro en tu computadora:\n\n"
         "  • 🚀 <b>Antigravity CLI (agy):</b> Desarrollo, refactorización, scripts y edición con memoria persistente.\n"
         "  • 📌 <b>Gestión de Proyectos:</b> Soporte para proyectos aislados o modo libre general.\n"
-        "  • 🌐 <b>Navegación Web:</b> Consulta portales, extrae datos y toma capturas en segundo plano.\n"
-        "  • 📄 <b>Archivos y Firma PDF:</b> Búsqueda en Drive/OneDrive y firma electrónica criptográfica.\n"
-        "  • ⚡ <b>Control del Sistema:</b> Estado de batería, CPU, RAM, capturas y confirmación de acciones críticas.\n\n"
+        "  • 🌐 <b>Navegación en Chrome:</b> Portales web, extracción de datos y sitios con sesiones activas.\n"
+        "  • 📄 <b>Archivos y Documentos:</b> Búsqueda en Google Drive o OneDrive y envío directo a Telegram.\n"
+        "  • ⚡ <b>Control del Sistema:</b> Estado de batería, CPU, RAM y capturas de pantalla al instante.\n\n"
         "<b>Comandos útiles:</b>\n"
-        "  • /memoria: Ver todo lo que el asistente recuerda sobre ti.\n"
         "  • /proyecto: Ver o cambiar el proyecto activo de trabajo.\n"
         "  • /cancelar o /stop: Aborta cualquier tarea en curso al instante.\n\n"
-        "Puedes escribirme, enviar PDFs o enviarme notas de voz 🎙️ libremente."
+        "Puedes escribirme o enviarme notas de voz 🎙️ libremente."
     )
     await update.message.reply_text(welcome_msg, parse_mode=ParseMode.HTML)
 
@@ -366,8 +369,60 @@ async def send_confirmation_prompt(update: Update, user_id: int, pending_conf: d
     )
 
 
+def _build_pin_keypad_markup(session_id: str, layout: list) -> InlineKeyboardMarkup:
+    """Construye un teclado numérico aleatorio 0-9 enmascarado estilo banco."""
+    rows = [
+        [InlineKeyboardButton(d, callback_data=f"pin_d:{session_id}:{d}") for d in layout[0:3]],
+        [InlineKeyboardButton(d, callback_data=f"pin_d:{session_id}:{d}") for d in layout[3:6]],
+        [InlineKeyboardButton(d, callback_data=f"pin_d:{session_id}:{d}") for d in layout[6:9]],
+        [
+            InlineKeyboardButton("⌫", callback_data=f"pin_bs:{session_id}"),
+            InlineKeyboardButton(layout[9], callback_data=f"pin_d:{session_id}:{layout[9]}"),
+            InlineKeyboardButton("❌", callback_data=f"pin_cx:{session_id}"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _format_pin_mask(count: int) -> str:
+    """Devuelve representación visual enmascarada del PIN (ej. '• • _ _')."""
+    dots = ["•"] * count + ["_"] * (4 - count)
+    return " ".join(dots)
+
+
+async def send_pin_keypad_prompt(message_obj, user_id: int, pin_req: dict):
+    """Despliega un teclado numérico aleatorio enmascarado para ingresar el PIN sin dejar rastro."""
+    # Limpiar sesiones previas del mismo usuario para evitar acumulación
+    for sid in [k for k, v in PENDING_PIN_SESSIONS.items() if v.get("user_id") == user_id]:
+        PENDING_PIN_SESSIONS.pop(sid, None)
+
+    layout = [str(i) for i in range(10)]
+    random.SystemRandom().shuffle(layout)
+    session_id = secrets.token_hex(4)
+    pdf_path = pin_req.get("pdf_path", "")
+    PENDING_PIN_SESSIONS[session_id] = {
+        "user_id": user_id,
+        "pdf_path": pdf_path,
+        "texto_busqueda": pin_req.get("texto_busqueda", ""),
+        "posicion": pin_req.get("posicion", "bottom-right"),
+        "pagina": pin_req.get("pagina", "last"),
+        "offset": pin_req.get("offset", ""),
+        "coordenadas": pin_req.get("coordenadas", ""),
+        "digits": [],
+        "layout": layout,
+    }
+    pdf_name = os.path.basename(pdf_path)
+    await message_obj.reply_text(
+        f"🔐 <b>Ingresa tu PIN de firma:</b> <code>{pdf_name}</code>\n"
+        f"PIN: <code>{_format_pin_mask(0)}</code>\n\n"
+        f"<i>Teclado seguro aleatorio: ningún dígito queda guardado en el chat.</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_build_pin_keypad_markup(session_id, layout),
+    )
+
+
 async def handle_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Procesa clics en botones de confirmación de acciones sensibles."""
+    """Procesa clics en botones de confirmación y en el teclado numérico seguro de PIN."""
     query = update.callback_query
     if not query or not query.from_user or not is_authorized(query.from_user.id):
         return
@@ -375,6 +430,109 @@ async def handle_confirmation_callback(update: Update, context: ContextTypes.DEF
 
     data = query.data or ""
     user_id = query.from_user.id
+
+    # --- Teclado numérico seguro de PIN ---
+    if data.startswith(("pin_d:", "pin_bs:", "pin_cx:")):
+        parts = data.split(":")
+        action = parts[0]
+        session_id = parts[1] if len(parts) > 1 else ""
+        sess = PENDING_PIN_SESSIONS.get(session_id)
+
+        if not sess or sess.get("user_id") != user_id:
+            try:
+                await query.edit_message_text("⌛ Esta sesión de PIN expiró. Envía o solicita el PDF nuevamente.")
+            except Exception:
+                pass
+            return
+
+        pdf_name = os.path.basename(sess["pdf_path"])
+
+        if action == "pin_cx":
+            sess["digits"].clear()
+            PENDING_PIN_SESSIONS.pop(session_id, None)
+            await query.edit_message_text("❎ <b>Firma cancelada.</b> No se aplicó ninguna firma.", parse_mode=ParseMode.HTML)
+            return
+
+        if action == "pin_bs":
+            if sess["digits"]:
+                sess["digits"].pop()
+            await query.edit_message_text(
+                f"🔐 <b>Ingresa tu PIN de firma:</b> <code>{pdf_name}</code>\n"
+                f"PIN: <code>{_format_pin_mask(len(sess['digits']))}</code>\n\n"
+                f"<i>Teclado seguro aleatorio: ningún dígito queda guardado en el chat.</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_pin_keypad_markup(session_id, sess["layout"]),
+            )
+            return
+
+        if action == "pin_d" and len(parts) == 3:
+            digit = parts[2]
+            if len(sess["digits"]) < 4:
+                sess["digits"].append(digit)
+
+            if len(sess["digits"]) < 4:
+                await query.edit_message_text(
+                    f"🔐 <b>Ingresa tu PIN de firma:</b> <code>{pdf_name}</code>\n"
+                    f"PIN: <code>{_format_pin_mask(len(sess['digits']))}</code>\n\n"
+                    f"<i>Teclado seguro aleatorio: ningún dígito queda guardado en el chat.</i>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_build_pin_keypad_markup(session_id, sess["layout"]),
+                )
+                return
+
+            # Completados los 4 dígitos: extraer PIN en memoria, borrar sesión y firmar
+            PENDING_PIN_SESSIONS.pop(session_id, None)
+            pin_val = "".join(sess["digits"])
+            sess["digits"].clear()
+
+            await query.edit_message_text(
+                f"🔐 PIN ingresado: <code>• • • •</code>\n✍️ Firmando electrónicamente <code>{pdf_name}</code>...",
+                parse_mode=ParseMode.HTML,
+            )
+
+            result_msg = await asyncio.to_thread(
+                firmar_documento_pdf,
+                sess["pdf_path"],
+                pin_val,
+                sess["texto_busqueda"],
+                sess["posicion"],
+                sess["pagina"],
+                sess["offset"],
+                sess["coordenadas"],
+            )
+            pin_val = ""  # Limpiar referencia
+
+            if "ENVIAR_ARCHIVO:" in result_msg:
+                signed_files = []
+                for line in result_msg.splitlines():
+                    if line.startswith("ENVIAR_ARCHIVO:"):
+                        cand = line.split("ENVIAR_ARCHIVO:", 1)[1].strip()
+                        if os.path.exists(cand):
+                            signed_files.append(cand)
+                await query.edit_message_text(
+                    f"✅ <b>Documento firmado electrónicamente:</b> <code>{pdf_name}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+                for fpath in signed_files:
+                    with open(fpath, "rb") as doc_fh:
+                        await context.bot.send_document(
+                            chat_id=query.message.chat_id,
+                            document=doc_fh,
+                            filename=os.path.basename(fpath),
+                            caption=f"📎 <code>{os.path.basename(fpath)}</code>",
+                            parse_mode=ParseMode.HTML,
+                        )
+                PENDING_PDFS.pop(user_id, None)
+            else:
+                await query.edit_message_text(
+                    f"❌ <b>No se pudo firmar el PDF:</b>\n<code>{result_msg}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+                # Si fue PIN incorrecto, desplegar un nuevo teclado aleatorio para reintentar
+                if "pin" in result_msg.lower():
+                    await send_pin_keypad_prompt(query.message, user_id, sess)
+            return
+
     if data.startswith("confirm:"):
         action_id = data.split(":", 1)[1]
         PENDING_USER_CONFIRM.pop(user_id, None)
@@ -471,27 +629,22 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_pdf = safe_name.lower().endswith(".pdf") or (doc.mime_type == "application/pdf")
 
     if is_pdf:
-        pin, remainder = _parse_pin_and_search(caption)
-        if pin and not remainder:
-            PENDING_PDFS.pop(user.id, None)
-            await _sign_and_deliver_pdf(update, local_path, pin, "")
-        elif pin and remainder:
-            PENDING_PDFS.pop(user.id, None)
+        PENDING_PDFS[user.id] = local_path
+        if caption:
             prompt = (
                 f"El usuario acaba de enviar el PDF '{local_path}' con la instrucción: '{caption}'. "
-                f"Fírmalo inmediatamente usando firmar_documento_pdf respetando el PIN, página, posición o texto de búsqueda indicados."
+                f"Usa firmar_documento_pdf(ruta_pdf='{local_path}', pin='') dejando pin='' para desplegar el teclado seguro "
+                f"con la página, posición o texto de búsqueda indicados."
             )
             result = await run_with_typing(update, agent.run_task, prompt)
-            await send_clean_message(update, result.get("text", "Documento procesado."))
-            await send_attached_files(update, result.get("files", []))
+            pin_req = result.get("pending_pin_request")
+            if pin_req:
+                await send_pin_keypad_prompt(update.message, user.id, pin_req)
+            else:
+                await send_clean_message(update, result.get("text", "Documento procesado."))
+                await send_attached_files(update, result.get("files", []))
         else:
-            PENDING_PDFS[user.id] = local_path
-            await update.message.reply_text(
-                f"📄 PDF recibido: <code>{safe_name}</code>\n"
-                f"🔐 Envíame tu <b>PIN de 4 dígitos</b> por texto o audio para firmarlo (ej. <code>1234</code>).\n"
-                f"<i>También puedes decirme dónde colocarla, ej: \"1234 en la página 1 arriba a la izquierda\" o \"1234 sobre Firma\".</i>",
-                parse_mode=ParseMode.HTML
-            )
+            await send_pin_keypad_prompt(update.message, user.id, {"pdf_path": local_path})
         return
 
     # Otros archivos (Word, Excel, etc.): pasarlos al agente autónomo
@@ -543,21 +696,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pin, remainder = _parse_pin_and_search(text)
         pending_path = PENDING_PDFS[user.id]
         if pin and not remainder:
+            # Borrar inmediatamente el mensaje con PIN escrito en texto plano para no dejar rastro
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
             signed_ok = await _sign_and_deliver_pdf(update, pending_path, pin, "")
             if signed_ok:
                 PENDING_PDFS.pop(user.id, None)
             return
         elif pin and remainder:
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
             prompt = (
-                f"El usuario tiene el PDF pendiente '{pending_path}' y ahora dio la instrucción: '{text}'. "
-                f"Fírmalo inmediatamente usando firmar_documento_pdf respetando exactamente el PIN, página, posición o texto de búsqueda."
+                f"El usuario tiene el PDF pendiente '{pending_path}' y ahora dio una instrucción de ubicación: '{remainder}'. "
+                f"Usa firmar_documento_pdf(ruta_pdf='{pending_path}', pin='') dejando pin=''."
             )
             result = await run_with_typing(update, agent.run_task, prompt)
-            await send_clean_message(update, result.get("text", "Documento procesado."))
-            files_out = result.get("files", [])
-            await send_attached_files(update, files_out)
-            if any(f.lower().endswith("-signed.pdf") for f in files_out):
-                PENDING_PDFS.pop(user.id, None)
+            if result.get("pending_pin_request"):
+                await send_pin_keypad_prompt(update.message, user.id, result["pending_pin_request"])
+            else:
+                await send_clean_message(update, result.get("text", "Documento procesado."))
             return
 
     global CURRENT_RUNNING_TASK
@@ -567,7 +728,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await run_with_typing(update, agent.run_task, text)
         reply_text = result.get("text", "Tarea procesada.")
         pending_conf = result.get("pending_confirmation")
-        if pending_conf:
+        pending_pin = result.get("pending_pin_request")
+        if pending_pin:
+            await send_pin_keypad_prompt(update.message, user.id, pending_pin)
+        elif pending_conf:
             await send_confirmation_prompt(update, user.id, pending_conf)
         else:
             await send_clean_message(update, reply_text)
@@ -635,7 +799,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply_text = result.get("text", "Tarea procesada.")
         pending_conf = result.get("pending_confirmation")
-        if pending_conf:
+        pending_pin = result.get("pending_pin_request")
+        if pending_pin:
+            await send_pin_keypad_prompt(update.message, user.id, pending_pin)
+        elif pending_conf:
             await send_confirmation_prompt(update, user.id, pending_conf)
         else:
             await send_clean_message(update, reply_text)

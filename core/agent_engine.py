@@ -70,6 +70,7 @@ PORTALS_MAP = {
 CURRENT_RUN_FILES = []
 PENDING_CONFIRMATIONS = {}
 CURRENT_PENDING_CONFIRMATION = None
+PENDING_PIN_REQUEST = None
 
 
 def registrar_confirmacion_sensible(titulo: str, resumen: str, func, kwargs: dict) -> str:
@@ -950,7 +951,7 @@ def _resolve_firmar_pdf_command() -> list:
 
 def firmar_documento_pdf(
     ruta_pdf: str,
-    pin: str,
+    pin: str = "",
     texto_busqueda: str = "",
     posicion: str = "bottom-right",
     pagina: str = "last",
@@ -958,16 +959,18 @@ def firmar_documento_pdf(
     coordenadas: str = ""
 ) -> str:
     """Firma electrónicamente un documento PDF usando el motor local firmar-pdf (si está instalado) y lo adjunta a Telegram.
+    Si pin está vacío, activa el teclado numérico seguro enmascarado en Telegram.
 
     Args:
         ruta_pdf: Ruta absoluta al archivo PDF a firmar.
-        pin: PIN numérico de 4 dígitos para autorizar la firma electrónica.
+        pin: PIN numérico de 4 dígitos (déjalo vacío "" para mostrar el teclado seguro enmascarado).
         texto_busqueda: Texto opcional dentro del PDF sobre el cual estampar la firma.
         posicion: Posición predefinida si no hay texto_busqueda ('bottom-right', 'bottom-left', 'bottom-center', 'top-right', 'top-left', 'center').
         pagina: Página donde firmar ('last', 'first', 'all', o número de página).
         offset: Desplazamiento fino opcional 'dx,dy'.
         coordenadas: Coordenadas manuales opcionales 'x,y'.
     """
+    global PENDING_PIN_REQUEST
     try:
         from pathlib import Path
         pdf_path = Path(ruta_pdf.strip().strip('"'))
@@ -978,7 +981,18 @@ def firmar_documento_pdf(
 
         pin_clean = str(pin or "").strip()
         if not pin_clean:
-            return "[ERROR: Se requiere el PIN de 4 dígitos para firmar electrónicamente el documento.]"
+            PENDING_PIN_REQUEST = {
+                "pdf_path": str(pdf_path),
+                "texto_busqueda": (texto_busqueda or "").strip(),
+                "posicion": (posicion or "bottom-right").strip(),
+                "pagina": (pagina or "last").strip(),
+                "offset": (offset or "").strip(),
+                "coordenadas": (coordenadas or "").strip(),
+            }
+            return (
+                f"[SOLICITAR_PIN_TECLADO] Teclado numérico seguro activado para '{pdf_path.name}'. "
+                f"Detente aquí y deja que el usuario ingrese su PIN en los botones enmascarados."
+            )
 
         base_cmd = _resolve_firmar_pdf_command()
         out_dir = Path(WORKSPACE_DIR) / "temp" / "signed"
@@ -1239,9 +1253,10 @@ class AgentEngine:
         Ejecuta el bucle de agente autónomo con memoria persistente (corto y largo plazo)
         y tolerancia a fallos, priorizando Gemini 4 Hydrogen.
         """
-        global CURRENT_RUN_FILES, CURRENT_PENDING_CONFIRMATION
+        global CURRENT_RUN_FILES, CURRENT_PENDING_CONFIRMATION, PENDING_PIN_REQUEST
         CURRENT_RUN_FILES = []
         CURRENT_PENDING_CONFIRMATION = None
+        PENDING_PIN_REQUEST = None
         last_error = None
 
         contexto_memoria = formatear_contexto_memoria()
@@ -1304,6 +1319,7 @@ class AgentEngine:
                     "files": files_to_send,
                     "model_used": m,
                     "pending_confirmation": CURRENT_PENDING_CONFIRMATION,
+                    "pending_pin_request": PENDING_PIN_REQUEST,
                 }
             except Exception as e:
                 last_error = e

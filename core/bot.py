@@ -408,6 +408,7 @@ async def send_pin_keypad_prompt(message_obj, user_id: int, pin_req: dict):
         "pagina": pin_req.get("pagina", "last"),
         "offset": pin_req.get("offset", ""),
         "coordenadas": pin_req.get("coordenadas", ""),
+        "ubicacion_relativa": pin_req.get("ubicacion_relativa", ""),
         "digits": [],
         "layout": layout,
     }
@@ -499,6 +500,7 @@ async def handle_confirmation_callback(update: Update, context: ContextTypes.DEF
                 sess["pagina"],
                 sess["offset"],
                 sess["coordenadas"],
+                sess.get("ubicacion_relativa", ""),
             )
             pin_val = ""  # Limpiar referencia
 

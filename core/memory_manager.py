@@ -1,4 +1,4 @@
-"""
+﻿"""
 Sistema de Memoria Persistente para el Asistente Telegram:
 1. Memoria a corto plazo (buffer de conversación multi-turno).
 2. Memoria a largo plazo (perfil del usuario, hábitos, proyectos y preferencias).
@@ -49,7 +49,7 @@ def cargar_perfil() -> dict:
         guardar_perfil(default_profile)
         return default_profile
     try:
-        with open(PROFILE_FILE, "r", encoding="utf-8") as f:
+        with open(PROFILE_FILE, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Error cargando perfil: {e}")
@@ -59,7 +59,7 @@ def cargar_perfil() -> dict:
 def guardar_perfil(perfil: dict):
     """Guarda el perfil de largo plazo en disco."""
     try:
-        with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+        with open(PROFILE_FILE, "w", encoding="utf-8-sig") as f:
             json.dump(perfil, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.error(f"Error guardando perfil: {e}")
@@ -166,7 +166,7 @@ def cargar_historial(max_turnos: int = 10) -> list:
     if not os.path.exists(HISTORY_FILE):
         return []
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        with open(HISTORY_FILE, "r", encoding="utf-8-sig") as f:
             hist = json.load(f)
             return hist[-max_turnos:]
     except Exception as e:
@@ -179,7 +179,7 @@ def registrar_turno(usuario: str, asistente: str):
     try:
         historial = []
         if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            with open(HISTORY_FILE, "r", encoding="utf-8-sig") as f:
                 historial = json.load(f)
 
         historial.append({
@@ -189,7 +189,7 @@ def registrar_turno(usuario: str, asistente: str):
         })
 
         historial = historial[-25:]
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        with open(HISTORY_FILE, "w", encoding="utf-8-sig") as f:
             json.dump(historial, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.error(f"Error registrando turno en historial: {e}")

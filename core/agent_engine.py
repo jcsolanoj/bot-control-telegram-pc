@@ -949,6 +949,71 @@ def _resolve_firmar_pdf_command() -> list:
     return [sys.executable, "-m", "firma_pdf.cli"]
 
 
+def _find_text_coords_in_pdf(pdf_path: str, texto_busqueda: str, pagina_pref: str = "last", ubicacion_relativa: str = "") -> tuple:
+    """Busca texto en todas las páginas del PDF con PyMuPDF y devuelve (pagina_1based, coords_str) si lo encuentra."""
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        total = len(doc)
+        if total == 0:
+            doc.close()
+            return None, None
+
+        terms = [texto_busqueda.strip()]
+        words = [w for w in texto_busqueda.strip().split() if len(w) > 3]
+        if len(words) >= 2:
+            terms.append(" ".join(words[-2:]))
+            terms.append(words[-1])
+
+        pref = str(pagina_pref or "last").strip().lower()
+        if pref.isdigit() and 1 <= int(pref) <= total:
+            page_order = [int(pref) - 1] + [i for i in range(total) if i != int(pref) - 1]
+        else:
+            page_order = list(range(total))
+
+        found_page = None
+        found_rect = None
+        for idx in page_order:
+            page = doc[idx]
+            for term in terms:
+                rects = page.search_for(term)
+                if rects:
+                    found_page = idx + 1
+                    found_rect = rects[-1]
+                    break
+            if found_rect is not None:
+                break
+
+        if found_rect is None:
+            doc.close()
+            return None, None
+
+        page = doc[found_page - 1]
+        pw, ph = page.rect.width, page.rect.height
+        rel = (ubicacion_relativa or "").strip().lower()
+
+        if rel in ("derecha", "right", "al lado", "lado derecho"):
+            x_pdf = min(pw - 225, max(found_rect.x1 + 25, pw * 0.54))
+            y_pdf = max(15, min(ph - 75, ph - found_rect.y1 - 15))
+            coords_str = f"{int(round(x_pdf))},{int(round(y_pdf))}"
+        elif rel in ("izquierda", "left", "lado izquierdo"):
+            x_pdf = max(15, found_rect.x0 - 225)
+            y_pdf = max(15, min(ph - 75, ph - found_rect.y1 - 15))
+            coords_str = f"{int(round(x_pdf))},{int(round(y_pdf))}"
+        elif rel in ("debajo", "abajo", "below", "under"):
+            x_pdf = max(15, min(pw - 225, found_rect.x0))
+            y_pdf = max(15, ph - found_rect.y1 - 72)
+            coords_str = f"{int(round(x_pdf))},{int(round(y_pdf))}"
+        else:
+            coords_str = None
+
+        doc.close()
+        return str(found_page), coords_str
+    except Exception as e:
+        logger.warning(f"No se pudo pre-localizar texto en PDF: {e}")
+        return None, None
+
+
 def firmar_documento_pdf(
     ruta_pdf: str,
     pin: str = "",
@@ -956,7 +1021,8 @@ def firmar_documento_pdf(
     posicion: str = "bottom-right",
     pagina: str = "last",
     offset: str = "",
-    coordenadas: str = ""
+    coordenadas: str = "",
+    ubicacion_relativa: str = ""
 ) -> str:
     """Firma electrónicamente un documento PDF usando el motor local firmar-pdf (si está instalado) y lo adjunta a Telegram.
     Si pin está vacío, activa el teclado numérico seguro enmascarado en Telegram.
@@ -964,11 +1030,12 @@ def firmar_documento_pdf(
     Args:
         ruta_pdf: Ruta absoluta al archivo PDF a firmar.
         pin: PIN numérico de 4 dígitos (déjalo vacío "" para mostrar el teclado seguro enmascarado).
-        texto_busqueda: Texto opcional dentro del PDF sobre el cual estampar la firma.
+        texto_busqueda: Texto opcional dentro del PDF sobre el cual estampar la firma (ej. nombre del usuario).
         posicion: Posición predefinida si no hay texto_busqueda ('bottom-right', 'bottom-left', 'bottom-center', 'top-right', 'top-left', 'center').
         pagina: Página donde firmar ('last', 'first', 'all', o número de página).
         offset: Desplazamiento fino opcional 'dx,dy'.
         coordenadas: Coordenadas manuales opcionales 'x,y'.
+        ubicacion_relativa: Posición relativa respecto a texto_busqueda ('derecha', 'izquierda', 'encima', 'debajo').
     """
     global PENDING_PIN_REQUEST
     try:
@@ -988,11 +1055,34 @@ def firmar_documento_pdf(
                 "pagina": (pagina or "last").strip(),
                 "offset": (offset or "").strip(),
                 "coordenadas": (coordenadas or "").strip(),
+                "ubicacion_relativa": (ubicacion_relativa or "").strip(),
             }
             return (
                 f"[SOLICITAR_PIN_TECLADO] Teclado numérico seguro activado para '{pdf_path.name}'. "
                 f"Detente aquí y deja que el usuario ingrese su PIN en los botones enmascarados."
             )
+
+        eff_page = str(pagina or "last").strip()
+        eff_coords = (coordenadas or "").strip()
+        eff_search = (texto_busqueda or "").strip()
+
+        # Si el usuario no configuró USER_NAME y dijo "mi nombre", extraer nombre real del certificado .p12
+        if eff_search.lower() in ("usuario", "mi_nombre", "mi nombre"):
+            try:
+                from firma_pdf.config import get_credentials
+                from firma_pdf.cert_utils import load_p12_certificate, extract_signer_name
+                p12_p, p12_pw = get_credentials(pin=pin_clean)
+                _, cert, _ = load_p12_certificate(p12_p, p12_pw)
+                eff_search = extract_signer_name(cert)
+            except Exception:
+                eff_search = ""
+
+        if eff_search and not eff_coords and eff_page.lower() != "all":
+            found_p, found_c = _find_text_coords_in_pdf(str(pdf_path), eff_search, eff_page, ubicacion_relativa)
+            if found_p:
+                eff_page = found_p
+                if found_c:
+                    eff_coords = found_c
 
         base_cmd = _resolve_firmar_pdf_command()
         out_dir = Path(WORKSPACE_DIR) / "temp" / "signed"
@@ -1002,12 +1092,12 @@ def firmar_documento_pdf(
             "-i", str(pdf_path),
             "-o", str(out_dir),
             "--pin", pin_clean,
-            "--page", str(pagina or "last").strip()
+            "--page", eff_page
         ]
-        if coordenadas and coordenadas.strip():
-            cmd.extend(["--coords", coordenadas.strip()])
-        elif texto_busqueda and texto_busqueda.strip():
-            cmd.extend(["--search-text", texto_busqueda.strip()])
+        if eff_coords:
+            cmd.extend(["--coords", eff_coords])
+        elif eff_search:
+            cmd.extend(["--search-text", eff_search])
         else:
             valid_pos = {"bottom-right", "bottom-left", "bottom-center", "top-right", "top-left", "center"}
             pos_clean = posicion if posicion in valid_pos else "bottom-right"
@@ -1183,7 +1273,8 @@ PAUTAS CRUCIALES DE INTERACCIÓN:
 
 6. GOOGLE WORKSPACE Y FIRMA DE PDFs:
    - Usa `consultar_calendario_google`, `crear_evento_calendario_google`, `leer_correos_gmail`, `enviar_correo_gmail` y `buscar_google_drive_nube` cuando solicite datos de Google Workspace.
-   - Si envía un PDF o pide firmar uno con su PIN, usa `firmar_documento_pdf`.
+   - Si envía un PDF o pide firmar uno, usa `firmar_documento_pdf(ruta_pdf=..., pin="")` dejando `pin=""` para mostrar el teclado numérico seguro.
+   - Si dice "sobre mi nombre" o "a la derecha de mi nombre", usa el nombre real del usuario en la Memoria a Largo Plazo (o `"MI_NOMBRE"` si aún dice `"Usuario"` para leerlo del certificado `.p12`) junto con `ubicacion_relativa="derecha"|"izquierda"|"debajo"|"encima"`.
 
 7. CONFIRMACIÓN OBLIGATORIA DE ACCIONES SENSIBLES:
    - Las herramientas `apagar_pc`, `reiniciar_pc`, `cerrar_aplicaciones_abiertas` y `enviar_correo_gmail` requieren confirmación explícita del usuario. Invócalas con `confirmado=False` y detente cuando devuelvan `[CONFIRMACION_REQUERIDA:...]`.

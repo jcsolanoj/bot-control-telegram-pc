@@ -1153,14 +1153,16 @@ def crear_evento_calendario_google(
     titulo: str,
     fecha_inicio_iso: str,
     duracion_minutos: int = 60,
-    descripcion: str = ""
+    descripcion: str = "",
+    con_meet: bool = False
 ) -> str:
-    """Crea un nuevo evento o recordatorio en Google Calendar."""
+    """Crea un nuevo evento o recordatorio en Google Calendar (opcionalmente con Google Meet)."""
     return google_workspace.crear_evento_calendario(
         titulo=titulo,
         fecha_inicio_iso=fecha_inicio_iso,
         duracion_minutos=duracion_minutos,
-        descripcion=descripcion
+        descripcion=descripcion,
+        con_meet=con_meet
     )
 
 
@@ -1177,26 +1179,81 @@ def enviar_correo_gmail(
     destinatario: str,
     asunto: str,
     cuerpo: str,
+    adjunto: str = "",
+    borrador: bool = False,
     confirmado: bool = False
 ) -> str:
-    """Envía un correo electrónico por Gmail (requiere confirmación explícita del usuario)."""
+    """Envía un correo electrónico (o guarda borrador) por Gmail (requiere confirmación explícita del usuario)."""
     if not confirmado:
+        adj_txt = f" (con adjunto '{os.path.basename(adjunto)}')" if adjunto else ""
+        accion_txt = "Guardar borrador en Gmail" if borrador else "Enviar correo por Gmail"
         return registrar_confirmacion_sensible(
-            titulo="Enviar correo por Gmail",
-            resumen=f"Enviar correo a '{destinatario}' con asunto '{asunto}'.",
+            titulo=accion_txt,
+            resumen=f"{accion_txt} a '{destinatario}' con asunto '{asunto}'{adj_txt}.",
             func=enviar_correo_gmail,
-            kwargs={"destinatario": destinatario, "asunto": asunto, "cuerpo": cuerpo},
+            kwargs={
+                "destinatario": destinatario,
+                "asunto": asunto,
+                "cuerpo": cuerpo,
+                "adjunto": adjunto,
+                "borrador": borrador,
+            },
         )
     return google_workspace.enviar_correo_gmail(
         destinatario=destinatario,
         asunto=asunto,
-        cuerpo=cuerpo
+        cuerpo=cuerpo,
+        adjunto=adjunto,
+        borrador=borrador
     )
 
 
 def buscar_google_drive_nube(consulta: str, limite: int = 8) -> str:
     """Busca archivos directamente en la nube de Google Drive."""
     return google_workspace.buscar_drive_nube(consulta=consulta, limite=limite)
+
+
+def descargar_archivo_google_drive(file_id: str, nombre_archivo: str = "", exportar_pdf: bool = False) -> str:
+    """Descarga un archivo de Google Drive (o exporta un Google Doc/Sheet/Slide a PDF)."""
+    global CURRENT_RUN_FILES
+    local_path, msg = google_workspace.descargar_archivo_drive(
+        file_id=file_id, nombre_archivo=nombre_archivo, exportar_pdf=exportar_pdf
+    )
+    if not local_path:
+        return msg
+    if local_path not in CURRENT_RUN_FILES:
+        CURRENT_RUN_FILES.append(local_path)
+    return f"{msg}\nENVIAR_ARCHIVO: {local_path}"
+
+
+def listar_tareas_google(limite: int = 15) -> str:
+    """Lista las tareas pendientes en Google Tasks."""
+    return google_workspace.listar_tareas_google(limite=limite)
+
+
+def crear_tarea_google(titulo: str, notas: str = "", fecha_limite_iso: str = "") -> str:
+    """Crea una nueva tarea pendiente en Google Tasks."""
+    return google_workspace.crear_tarea_google(titulo=titulo, notas=notas, fecha_limite_iso=fecha_limite_iso)
+
+
+def leer_hoja_google_sheets(spreadsheet_id: str, rango: str = "A1:Z30") -> str:
+    """Lee celdas y valores de una hoja de cálculo de Google Sheets."""
+    return google_workspace.leer_hoja_sheets(spreadsheet_id=spreadsheet_id, rango=rango)
+
+
+def agregar_fila_google_sheets(spreadsheet_id: str, valores_csv: str) -> str:
+    """Agrega una nueva fila al final de una hoja de cálculo de Google Sheets."""
+    return google_workspace.agregar_fila_sheets(spreadsheet_id=spreadsheet_id, valores_csv=valores_csv)
+
+
+def leer_google_doc(document_id: str) -> str:
+    """Lee el contenido de texto de un documento de Google Docs por su ID."""
+    return google_workspace.leer_documento_docs(document_id=document_id)
+
+
+def escribir_en_google_doc(document_id: str, texto: str) -> str:
+    """Agrega texto al final de un documento de Google Docs."""
+    return google_workspace.escribir_en_documento_docs(document_id=document_id, texto=texto)
 
 
 def consultar_consumo_api() -> str:
@@ -1271,8 +1328,11 @@ PAUTAS CRUCIALES DE INTERACCIÓN:
    - Si pregunta qué sabes o recuerdas de él/ella, usa `consultar_memoria_sobre_usuario`.
    - Responde de forma concisa, directa y profesional, sin encabezados `#` ni markdown roto.
 
-6. GOOGLE WORKSPACE Y FIRMA DE PDFs:
-   - Usa `consultar_calendario_google`, `crear_evento_calendario_google`, `leer_correos_gmail`, `enviar_correo_gmail` y `buscar_google_drive_nube` cuando solicite datos de Google Workspace.
+6. GOOGLE WORKSPACE VÍA `gws` Y FIRMA DE PDFs:
+   - Agenda/Meet: `consultar_calendario_google`, `crear_evento_calendario_google(con_meet=...)`.
+   - Gmail: `leer_correos_gmail`, `enviar_correo_gmail(adjunto=..., borrador=...)`.
+   - Drive: `buscar_google_drive_nube` y `descargar_archivo_google_drive(file_id=..., exportar_pdf=...)`.
+   - Tareas, Hojas y Documentos: `listar_tareas_google`, `crear_tarea_google`, `leer_hoja_google_sheets`, `agregar_fila_google_sheets`, `leer_google_doc`, `escribir_en_google_doc`.
    - Si envía un PDF o pide firmar uno, usa `firmar_documento_pdf(ruta_pdf=..., pin="")` dejando `pin=""` para mostrar el teclado numérico seguro.
    - Si dice "sobre mi nombre" o "a la derecha de mi nombre", usa el nombre real del usuario en la Memoria a Largo Plazo (o `"MI_NOMBRE"` si aún dice `"Usuario"` para leerlo del certificado `.p12`) junto con `ubicacion_relativa="derecha"|"izquierda"|"debajo"|"encima"`.
 
@@ -1312,6 +1372,13 @@ class AgentEngine:
             leer_correos_gmail,
             enviar_correo_gmail,
             buscar_google_drive_nube,
+            descargar_archivo_google_drive,
+            listar_tareas_google,
+            crear_tarea_google,
+            leer_hoja_google_sheets,
+            agregar_fila_google_sheets,
+            leer_google_doc,
+            escribir_en_google_doc,
             consultar_consumo_api,
             responder_con_audio,
             transcribir_archivo_multimedia,
